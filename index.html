@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hayley Buettner's Excellent Throws</title>
+  <style>
+    :root {
+      --accent: #ff7f50;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    body {
+      margin: 0;
+      padding: 1.5rem;
+      background: #f9fafb;
+      color: #111827;
+    }
+    h1 {
+      margin-top: 0;
+      color: var(--accent);
+      text-align: center;
+      font-size: 2rem;
+    }
+    #data-list {
+      margin: 1rem 0;
+      background: #ffffff;
+      border: 1px solid #d1d5db;
+      border-radius: 0.5rem;
+      padding: 0.75rem;
+      font-size: 0.95rem;
+    }
+    #controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: end;
+    }
+    input[type="number"] {
+      width: 120px;
+      padding: 0.4rem;
+      border: 1px solid #d1d5db;
+      border-radius: 0.4rem;
+    }
+    button {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 0.4rem;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+    button:hover {
+      opacity: 0.9;
+    }
+    #results {
+      margin-top: 1.2rem;
+      background: #ffffff;
+      border: 1px solid #d1d5db;
+      border-radius: 0.5rem;
+      padding: 0.9rem;
+    }
+    #chart-container {
+      margin-top: 1.8rem;
+    }
+    canvas {
+      background: #ffffff;
+      border: 1px solid #d1d5db;
+      border-radius: 0.5rem;
+    }
+    footer {
+      margin-top: 2.5rem;
+      font-size: 0.85rem;
+      text-align: center;
+      color: #4b5563;
+    }
+  </style>
+</head>
+<body>
+  <h1>Hayley Buettner's Excellent Throws</h1>
+
+  <section id="data-list"></section>
+
+  <div id="controls">
+    <label>
+      Current Throws:
+      <input id="current-throws" type="number" min="0" />
+    </label>
+    <button id="add-btn">Add Today &amp; Recalculate</button>
+  </div>
+
+  <div id="results"></div>
+
+  <div id="chart-container">
+    <canvas id="chart" height="320"></canvas>
+  </div>
+
+  <footer>
+    Built with ❤️ to celebrate Hayley's journey to 999 excellent throws.
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    const startDate = new Date('2023-10-10');
+    const targetThrows = 999;
+
+    //— Pre‑seeded progress data
+    const progress = [
+      { date: new Date('2023-10-10'), throws: 0 },
+      { date: new Date('2024-08-18'), throws: 526 },
+      { date: new Date('2024-11-24'), throws: 682 },
+      { date: new Date('2025-05-05'), throws: 882 },
+    ];
+
+    //— Utilities
+    const daysBetween = (d) => (d - startDate) / 86_400_000; // ms per day
+    const fmtDate = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+
+    //— Regression helpers
+    function linReg(x, y) {
+      const n = x.length;
+      let sx = 0, sy = 0, sxy = 0, sx2 = 0;
+      for (let i = 0; i < n; i++) {
+        sx += x[i];
+        sy += y[i];
+        sxy += x[i] * y[i];
+        sx2 += x[i] * x[i];
+      }
+      const a = (n * sxy - sx * sy) / (n * sx2 - sx * sx);
+      const b = (sy - a * sx) / n;
+      return { type: 'Linear', predict: (t) => a * t + b, params: { a, b } };
+    }
+    function logReg(x, y) {
+      const lx = x.map((v) => Math.log(Math.max(v, 1e-6)));
+      const lr = linReg(lx, y);
+      return { type: 'Logarithmic', predict: (t) => lr.params.a * Math.log(Math.max(t, 1e-6)) + lr.params.b, params: lr.params };
+    }
+    function expReg(x, y) {
+      const ly = y.map((v) => Math.log(Math.max(v, 1e-6)));
+      const lr = linReg(x, ly);
+      const a = Math.exp(lr.params.b);
+      const b = lr.params.a;
+      return { type: 'Exponential', predict: (t) => a * Math.exp(b * t), params: { a, b } };
+    }
+
+    function rss(model, x, y) {
+      return x.reduce((acc, xi, i) => {
+        const err = y[i] - model.predict(xi);
+        return acc + err * err;
+      }, 0);
+    }
+
+    //— Chart instance (global so we can destroy on update)
+    let chart;
+
+    function render() {
+      // Prepare arrays
+      const x = progress.map((p) => daysBetween(p.date));
+      const y = progress.map((p) => p.throws);
+
+      // Fit models
+      const models = [linReg(x, y), logReg(x, y), expReg(x, y)];
+      const errors = models.map((m) => rss(m, x, y));
+      const bestIdx = errors.indexOf(Math.min(...errors));
+      const bestModel = models[bestIdx];
+
+      // Predict date
+      let predDays = null;
+      if (bestModel.type === 'Linear') {
+        predDays = (targetThrows - bestModel.params.b) / bestModel.params.a;
+      } else if (bestModel.type === 'Logarithmic') {
+        predDays = Math.exp((targetThrows - bestModel.params.b) / bestModel.params.a);
+      } else {
+        predDays = Math.log(targetThrows / bestModel.params.a) / bestModel.params.b;
+      }
+      const finishDate = new Date(startDate.getTime() + predDays * 86_400_000);
+
+      // Update results box
+      document.getElementById('results').innerHTML = `<h2>Best Fit: ${bestModel.type}</h2>
+        <p><strong>Predicted completion:</strong> ${fmtDate(finishDate)}</p>`;
+
+      // Update data list
+      document.getElementById('data-list').innerHTML = `<strong>Known Data:</strong><br>${progress
+        .map((p) => `${fmtDate(p.date)} – ${p.throws}`)
+        .join('<br>')}`;
+
+      // Build curve for chart
+      const maxX = Math.max(...x, predDays);
+      const curveX = Array.from({ length: 120 }, (_, i) => (i * maxX) / 119);
+      const curveY = curveX.map(bestModel.predict);
+
+      // Destroy old chart
+      if (chart) chart.destroy();
+      const ctx = document.getElementById('chart').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'scatter',
+        data: {
+          datasets: [
+            {
+              label: 'Data',
+              data: x.map((xi, i) => ({ x: xi, y: y[i] })),
+              pointRadius: 4,
+              backgroundColor: '#111827',
+            },
+            {
+              label: `${bestModel.type} Fit`,
+              data: curveX.map((xi, i) => ({ x: xi, y: curveY[i] })),
+              type: 'line',
+              borderWidth: 2,
+              fill: false,
+            },
+          ],
+        },
+        options: {
+          scales: {
+            x: {
+              title: { display: true, text: 'Days Since 2023-10-10' },
+            },
+            y: {
+              title: { display: true, text: 'Excellent Throws' },
+              min: 0,
+            },
+          },
+          plugins: { legend: { position: 'bottom' } },
+        },
+      });
+    }
+
+    //— Event listeners
+    document.getElementById('add-btn').addEventListener('click', () => {
+      const val = Number(document.getElementById('current-throws').value);
+      if (isNaN(val) || val < 0) {
+        alert('Please enter a valid number');
+        return;
+      }
+      progress.push({ date: new Date(), throws: val });
+      document.getElementById('current-throws').value = '';
+      render();
+    });
+
+    // First render
+    render();
+  </script>
+</body>
+</html>
